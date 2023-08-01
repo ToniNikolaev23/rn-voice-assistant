@@ -1,5 +1,6 @@
-import React, {useEffect, useState} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {
+  Alert,
   Image,
   SafeAreaView,
   ScrollView,
@@ -12,14 +13,17 @@ import {
   heightPercentageToDP as hp,
 } from 'react-native-responsive-screen';
 import Features from '../components/Features';
-import {dummyMessages} from '../constants';
 import Voice from '@react-native-community/voice';
+import {apiCall} from '../api/openAI';
+import Tts from 'react-native-tts';
 
 const HomeScreen = () => {
-  const [messages, setMessages] = useState(dummyMessages);
+  const [messages, setMessages] = useState([]);
   const [recording, setRecording] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [result, setResult] = useState('');
+  const [loading, setLoading] = useState(false);
+  const ScrollViewRef = useRef();
 
   const speechStartHandler = e => {
     console.log('Speech start handler');
@@ -41,15 +45,18 @@ const HomeScreen = () => {
   };
 
   const clearHandler = () => {
+    Tts.stop();
     setMessages([]);
   };
 
   const stopSpeakingHandler = () => {
+    Tts.stop();
     setSpeaking(false);
   };
 
   const startRecording = async () => {
     setRecording(true);
+    Tts.stop();
     try {
       await Voice.start('en-GB');
     } catch (e) {
@@ -62,15 +69,61 @@ const HomeScreen = () => {
       await Voice.stop();
       setRecording(false);
       //Fetch results
+      fetchResponse();
     } catch (e) {
       console.log('error', e);
     }
   };
+
+  const fetchResponse = () => {
+    if (result.trim().length > 0) {
+      let newMessages = [...messages];
+      newMessages.push({role: 'user', content: result.trim()});
+      setMessages([...newMessages]);
+      updateScrollView();
+      setLoading(true);
+      apiCall(result.trim(), newMessages).then(res => {
+        setLoading(false);
+        if (res.success) {
+          setMessages([...res.data]);
+          updateScrollView();
+          setResult('');
+          startTextToSpeech(res.data[res.data.length - 1]);
+        } else {
+          Alert.alert('Error', res.msg);
+        }
+      });
+    }
+  };
+
+  const startTextToSpeech = message => {
+    if (!message.content.includes('https')) {
+      setSpeaking(true);
+      Tts.speak(message.content, {
+        iosVoiceId: 'com.apple.ttsbundle.Moira-compact',
+        rate: 0.5,
+      });
+    }
+  };
+
+  const updateScrollView = () => {
+    setTimeout(() => {
+      ScrollViewRef?.current?.scrollToEnd({animated: true});
+    }, 200);
+  };
+
   useEffect(() => {
     Voice.onSpeechStart = speechStartHandler;
     Voice.onSpeechEnd = speechEndHandler;
     Voice.onSpeechResults = speechResultsHandler;
     Voice.onSpeechError = speechErrorHandler;
+
+    Tts.addEventListener('tts-start', event => console.log('start', event));
+    Tts.addEventListener('tts-progress', event =>
+      console.log('progress', event),
+    );
+    Tts.addEventListener('tts-finish', event => console.log('finish', event));
+    Tts.addEventListener('tts-cancel', event => console.log('cancel', event));
 
     return () => {
       Voice.destroy().then(Voice.removeAllListeners);
@@ -97,6 +150,7 @@ const HomeScreen = () => {
               style={{height: hp(58)}}
               className="bg-neutral-200 rounded-3xl p-4">
               <ScrollView
+                ref={ScrollViewRef}
                 bounces={false}
                 className="space-y-4"
                 showsVerticalScrollIndicator={false}>
@@ -151,7 +205,12 @@ const HomeScreen = () => {
         )}
 
         <View className="flex justify-center items-center">
-          {recording ? (
+          {loading ? (
+            <Image
+              source={require('../../assets/images/loading.gif')}
+              style={{width: hp(10), height: hp(10)}}
+            />
+          ) : recording ? (
             <TouchableOpacity onPress={stopRecording}>
               <Image
                 className="rounded-full"
@@ -168,6 +227,7 @@ const HomeScreen = () => {
               />
             </TouchableOpacity>
           )}
+
           {messages.length > 0 && (
             <TouchableOpacity
               onPress={clearHandler}
